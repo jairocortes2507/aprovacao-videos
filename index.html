@@ -86,6 +86,17 @@
   .entrar ol { padding-left:20px; font-size:14px; color:var(--suave); }
   .modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; z-index:20; padding:16px; }
   .modal .caixa { background:var(--card); border:1px solid var(--linha); border-radius:16px; padding:18px; max-width:420px; width:100%; }
+  .sub { display:flex; gap:6px; margin:0 0 14px; }
+  .sub button { flex:1; padding:9px; font-weight:600; color:var(--suave); }
+  .sub button.ativa { color:var(--acento-t); background:var(--acento); border-color:transparent; }
+  body[data-canal="painel"] .sub button.ativa { color:#fff; }
+  .agenda { background:var(--card); border:1px solid var(--linha); border-radius:16px; padding:6px 16px 16px; }
+  .agenda h2 { font:800 17px/1.3 var(--titulo); margin:22px 0 8px; padding-bottom:6px; border-bottom:1px solid var(--linha); }
+  body[data-canal="rabisco"] .agenda h2 { font-weight:400; font-size:24px; }
+  .agenda h3 { font-size:15px; margin:14px 0 4px; }
+  .agenda details { background:var(--fundo); }
+  .agenda pre { position:relative; }
+  .copiar { position:absolute; top:6px; right:6px; padding:4px 9px; font-size:12px; }
 </style>
 </head>
 <body>
@@ -104,7 +115,9 @@ const guardar = { get(k) { try { return localStorage.getItem(k); } catch (e) { r
 let token = guardar.get("gh_token") || "";
 let aba = (location.hash || "").replace("#", "") || guardar.get("aba") || "rabisco";
 const estado = {};            // canal -> lista de issues
-const blobs = {};             // repo/id -> blob url
+const blobs = {};
+const agendas = {};          // canal -> corpo da issue "Agenda de publicação"
+let vista = guardar.get("vista") || "aprovar";             // repo/id -> blob url
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
@@ -182,7 +195,10 @@ async function carregarTudo(avisar) {
         if (nomes.includes("piloto")) return recente(i);
         return nomes.includes("aguardando-aprovacao") && !nomes.includes("aprovado");
       };
-      const lista = (await r.json()).filter(i => !i.pull_request && pendente(i));
+      const todas = await r.json();
+      const ag = todas.find(i => /Agenda de publica/.test(i.title));
+      agendas[c.id] = ag ? { corpo: ag.body || "", url: ag.html_url } : null;
+      const lista = todas.filter(i => !i.pull_request && pendente(i));
       lista.forEach(i => i._status = fila[idDoTitulo(i.title)]);
       estado[c.id] = lista.sort((a, b) => a.number - b.number);
     } catch (e) { estado[c.id] = { erro: e.message }; }
@@ -198,10 +214,23 @@ function idDoTitulo(t) { const m = t.match(/\[([^\]]+)\]\s*$/); return m ? m[1] 
 function desenhar() {
   const alvo = $("#lista"); if (!alvo) return;
   const c = CANAIS.find(x => x.id === aba), lista = estado[c.id];
-  if (lista === undefined) { alvo.innerHTML = `<div class="vazio">Carregando…</div>`; return; }
-  if (lista.erro) { alvo.innerHTML = `<div class="vazio">Não consegui ler o ${esc(c.nome)}: ${esc(lista.erro)}</div>`; return; }
-  if (!lista.length) { alvo.innerHTML = `<div class="vazio">Nada esperando aprovação no ${esc(c.nome)}. 🎉</div>`; return; }
-  alvo.innerHTML = lista.map(i => {
+  const qtd = Array.isArray(lista) ? lista.length : 0;
+  const sub = `<div class="sub"><button data-v="aprovar" class="${vista === "aprovar" ? "ativa" : ""}">Para aprovar${qtd ? " (" + qtd + ")" : ""}</button>
+    <button data-v="agenda" class="${vista === "agenda" ? "ativa" : ""}">📅 Agenda</button></div>`;
+  const ligarSub = () => alvo.querySelectorAll(".sub button").forEach(b => b.onclick = () => { vista = b.dataset.v; guardar.set("vista", vista); desenhar(); });
+  if (vista === "agenda") {
+    const ag = agendas[c.id];
+    alvo.innerHTML = sub + (lista === undefined ? `<div class="vazio">Carregando…</div>` : !ag ? `<div class="vazio">Não achei a agenda do ${esc(c.nome)}.</div>` :
+      `<div class="agenda ficha">${DOMPurify.sanitize(marked.parse(ag.corpo))}<p><a href="${esc(ag.url)}">abrir no GitHub</a></p></div>`);
+    alvo.querySelectorAll(".agenda pre").forEach(pre => { const b = document.createElement("button"); b.className = "copiar"; b.textContent = "Copiar";
+      b.onclick = async () => { try { await navigator.clipboard.writeText(pre.innerText.replace(/Copiar$/, "").trim()); b.textContent = "Copiado ✓"; } catch (e) { b.textContent = "Não deu"; } setTimeout(() => b.textContent = "Copiar", 1800); };
+      pre.appendChild(b); });
+    return ligarSub();
+  }
+  if (lista === undefined) { alvo.innerHTML = sub + `<div class="vazio">Carregando…</div>`; return ligarSub(); }
+  if (lista.erro) { alvo.innerHTML = sub + `<div class="vazio">Não consegui ler o ${esc(c.nome)}: ${esc(lista.erro)}</div>`; return ligarSub(); }
+  if (!lista.length) { alvo.innerHTML = sub + `<div class="vazio">Nada esperando aprovação no ${esc(c.nome)}. 🎉</div>`; return ligarSub(); }
+  alvo.innerHTML = sub + lista.map(i => {
     const st = i._status || (i.labels.some(l => l.name === "piloto") ? "piloto" : "aguardando");
     const tags = `<span class="tag ${st === "revisar" ? "revisar" : st === "piloto" ? "piloto" : "aguardando-aprovacao"}">${st === "revisar" ? "em revisão" : st}</span>`;
     return `<article class="card" id="c-${i.number}">
@@ -209,6 +238,7 @@ function desenhar() {
         <div class="meta">${tags}<span>#${i.number}</span><span>${new Date(i.created_at).toLocaleString("pt-BR", {dateStyle:"short", timeStyle:"short"})}</span></div></div>
       <div class="corpo"></div></article>`;
   }).join("");
+  ligarSub();
   alvo.querySelectorAll(".topo").forEach(t => t.onclick = () => abrir(c, lista.find(i => i.number == t.dataset.n)));
 }
 
