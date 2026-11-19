@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aprovação dos vídeos</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+  :root { --fundo:#f4f2ee; --card:#fff; --tinta:#1d1d1f; --suave:#6b6b70; --linha:#e3e0da;
+          --ok:#1f8a4c; --nao:#c0392b; --aviso:#b7791f; --acento:#2b59c3; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--fundo); color:var(--tinta); }
+  header { position:sticky; top:0; z-index:5; background:var(--fundo); border-bottom:1px solid var(--linha); padding:12px 16px 0; }
+  h1 { font-size:18px; margin:0 0 10px; display:flex; justify-content:space-between; align-items:center; }
+  h1 button { font-size:13px; }
+  .abas { display:flex; gap:6px; }
+  .aba { flex:1; padding:10px; border:0; border-radius:10px 10px 0 0; background:transparent; font-weight:600; color:var(--suave); cursor:pointer; font-size:15px; }
+  .aba.ativa { background:var(--card); color:var(--tinta); box-shadow:0 -1px 0 var(--linha) inset; }
+  .aba .n { display:inline-block; min-width:22px; padding:0 6px; border-radius:11px; background:var(--aviso); color:#fff; font-size:12px; margin-left:4px; }
+  main { max-width:760px; margin:0 auto; padding:14px 12px 80px; }
+  .card { background:var(--card); border:1px solid var(--linha); border-radius:14px; margin-bottom:14px; overflow:hidden; }
+  .topo { padding:14px 16px; cursor:pointer; }
+  .topo h2 { font-size:16px; margin:0 0 6px; }
+  .meta { color:var(--suave); font-size:13px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .tag { padding:1px 8px; border-radius:10px; font-size:12px; font-weight:600; background:#eee; }
+  .tag.aguardando-aprovacao { background:#fdf0d5; color:#8a5a00; }
+  .tag.revisar { background:#fde2e0; color:#9b2c22; }
+  .tag.piloto { background:#e3ebfb; color:#2b4a9b; }
+  .corpo { border-top:1px solid var(--linha); padding:14px 16px; display:none; }
+  .card.aberto .corpo { display:block; }
+  video { width:100%; max-height:70vh; background:#000; border-radius:10px; display:block; }
+  .vid { margin-bottom:12px; }
+  .vid .aviso { font-size:13px; color:var(--suave); padding:10px; background:#faf8f4; border-radius:8px; }
+  .acoes { display:flex; gap:8px; flex-wrap:wrap; margin:12px 0; }
+  button { font:inherit; border:1px solid var(--linha); background:#fff; border-radius:10px; padding:10px 14px; cursor:pointer; }
+  button.ok { background:var(--ok); color:#fff; border-color:var(--ok); font-weight:600; flex:1; }
+  button.nao { color:var(--nao); border-color:#f0c7c2; }
+  button.refazer { color:var(--acento); border-color:#c9d6f2; }
+  button:disabled { opacity:.5; cursor:default; }
+  textarea, input { width:100%; font:inherit; padding:10px; border:1px solid var(--linha); border-radius:10px; }
+  textarea { min-height:90px; }
+  .ficha { font-size:14px; overflow-wrap:anywhere; }
+  .ficha img { max-width:100%; }
+  .ficha pre, .ficha code { white-space:pre-wrap; font-size:13px; background:#f6f4f0; border-radius:6px; }
+  .ficha table { border-collapse:collapse; font-size:13px; display:block; overflow-x:auto; }
+  .ficha td, .ficha th { border:1px solid var(--linha); padding:4px 6px; }
+  details { margin-top:10px; }
+  summary { cursor:pointer; color:var(--suave); font-size:14px; }
+  .coment { font-size:13px; border-left:3px solid var(--linha); padding:6px 10px; margin:8px 0; }
+  .coment b { color:var(--suave); font-weight:600; }
+  .vazio { text-align:center; color:var(--suave); padding:40px 10px; }
+  .msg { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); background:#1d1d1f; color:#fff; padding:10px 16px;
+         border-radius:10px; font-size:14px; max-width:90%; display:none; z-index:10; }
+  .entrar { max-width:460px; margin:40px auto; background:var(--card); border:1px solid var(--linha); border-radius:14px; padding:20px; }
+  .entrar ol { padding-left:20px; font-size:14px; }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; z-index:20; padding:16px; }
+  .modal .caixa { background:#fff; border-radius:14px; padding:18px; max-width:420px; width:100%; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="msg" id="msg"></div>
+<div class="modal" id="modal"><div class="caixa" id="caixa"></div></div>
+<script>
+const DONO = "jairocortes2507";
+const CANAIS = [
+  { id: "rabisco", nome: "Rabisco Curioso", repo: "videos-curiosidades" },
+  { id: "painel", nome: "Painel Tricolor", repo: "tricolor-em-pauta" },
+];
+const PENDENTES = ["aguardando-aprovacao", "revisar", "piloto"];
+const guardar = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+                  set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} } };
+let token = guardar.get("gh_token") || "";
+let aba = (location.hash || "").replace("#", "") || guardar.get("aba") || "rabisco";
+const estado = {};            // canal -> lista de issues
+const blobs = {};             // repo/id -> blob url
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function aviso(t, ms = 3500) { const m = $("#msg"); m.textContent = t; m.style.display = "block"; clearTimeout(m._t); m._t = setTimeout(() => m.style.display = "none", ms); }
+
+async function api(caminho, opcoes = {}) {
+  const r = await fetch("https://api.github.com" + caminho, { ...opcoes,
+    headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github+json", ...(opcoes.headers || {}) } });
+  if (r.status === 401) { sair(); throw new Error("chave inválida ou vencida"); }
+  if (!r.ok) throw new Error(`GitHub ${r.status}: ${(await r.text()).slice(0, 160)}`);
+  return r;
+}
+
+function telaEntrar(erro) {
+  $("#app").innerHTML = `
+  <div class="entrar">
+    <h1>Aprovação dos vídeos</h1>
+    <p>Cole a sua chave do GitHub. Ela fica guardada só neste navegador.</p>
+    ${erro ? `<p style="color:var(--nao)">${esc(erro)}</p>` : ""}
+    <input id="tk" type="password" placeholder="github_pat_..." autocomplete="off">
+    <div class="acoes"><button class="ok" id="entrar">Entrar</button></div>
+    <details><summary>Como criar a chave</summary><ol>
+      <li>No GitHub: foto → Settings → Developer settings → Personal access tokens → <b>Fine-grained tokens</b> → Generate new token.</li>
+      <li>Repository access: <b>Only select repositories</b> → videos-curiosidades e tricolor-em-pauta.</li>
+      <li>Permissions: <b>Issues: Read and write</b> e <b>Contents: Read-only</b>.</li>
+      <li>Expiration: o maior prazo disponível. Gere e cole aqui.</li></ol></details>
+  </div>`;
+  $("#entrar").onclick = async () => {
+    token = $("#tk").value.trim();
+    if (!token) return;
+    try { await api(`/repos/${DONO}/${CANAIS[0].repo}`); guardar.set("gh_token", token); iniciar(); }
+    catch (e) { token = ""; telaEntrar("Não consegui entrar com essa chave (" + e.message + ")."); }
+  };
+}
+
+function sair() { token = ""; guardar.set("gh_token", null); telaEntrar(); }
+
+function iniciar() {
+  $("#app").innerHTML = `
+  <header>
+    <h1><span>Aprovação dos vídeos</span><span><button id="atualizar">↻ Atualizar</button> <button id="sair">Sair</button></span></h1>
+    <nav class="abas">${CANAIS.map(c => `<button class="aba" data-aba="${c.id}">${c.nome}<span class="n" id="n-${c.id}" hidden></span></button>`).join("")}</nav>
+  </header>
+  <main id="lista"><div class="vazio">Carregando…</div></main>`;
+  $("#sair").onclick = sair;
+  $("#atualizar").onclick = () => carregarTudo(true);
+  document.querySelectorAll(".aba").forEach(b => b.onclick = () => trocar(b.dataset.aba));
+  trocar(CANAIS.some(c => c.id === aba) ? aba : "rabisco");
+  carregarTudo();
+}
+
+function trocar(id) {
+  aba = id; guardar.set("aba", id);
+  if (location.hash !== "#" + id) history.replaceState(null, "", "#" + id);
+  document.querySelectorAll(".aba").forEach(b => b.classList.toggle("ativa", b.dataset.aba === id));
+  desenhar();
+}
+window.addEventListener("hashchange", () => { const h = location.hash.replace("#", ""); if (CANAIS.some(c => c.id === h)) trocar(h); });
+
+async function carregarTudo(avisar) {
+  await Promise.all(CANAIS.map(async c => {
+    try {
+      const r = await api(`/repos/${DONO}/${c.repo}/issues?state=open&per_page=100`);
+      const lista = (await r.json()).filter(i => !i.pull_request && i.labels.some(l => PENDENTES.includes(l.name)));
+      estado[c.id] = lista.sort((a, b) => a.number - b.number);
+    } catch (e) { estado[c.id] = { erro: e.message }; }
+    const n = $("#n-" + c.id), q = Array.isArray(estado[c.id]) ? estado[c.id].length : 0;
+    if (n) { n.textContent = q; n.hidden = !q; }
+  }));
+  desenhar();
+  if (avisar) aviso("Atualizado");
+}
+
+function idDoTitulo(t) { const m = t.match(/\[([^\]]+)\]\s*$/); return m ? m[1] : null; }
+
+function desenhar() {
+  const alvo = $("#lista"); if (!alvo) return;
+  const c = CANAIS.find(x => x.id === aba), lista = estado[c.id];
+  if (lista === undefined) { alvo.innerHTML = `<div class="vazio">Carregando…</div>`; return; }
+  if (lista.erro) { alvo.innerHTML = `<div class="vazio">Não consegui ler o ${esc(c.nome)}: ${esc(lista.erro)}</div>`; return; }
+  if (!lista.length) { alvo.innerHTML = `<div class="vazio">Nada esperando aprovação no ${esc(c.nome)}. 🎉</div>`; return; }
+  alvo.innerHTML = lista.map(i => {
+    const tags = i.labels.filter(l => PENDENTES.includes(l.name)).map(l => `<span class="tag ${esc(l.name)}">${esc(l.name.replace("aguardando-aprovacao", "aguardando"))}</span>`).join("");
+    return `<article class="card" id="c-${i.number}">
+      <div class="topo" data-n="${i.number}"><h2>${esc(i.title.replace(/^Aprovar:\s*/, "").replace(/\s*\[[^\]]+\]\s*$/, ""))}</h2>
+        <div class="meta">${tags}<span>#${i.number}</span><span>${new Date(i.created_at).toLocaleString("pt-BR", {dateStyle:"short", timeStyle:"short"})}</span></div></div>
+      <div class="corpo"></div></article>`;
+  }).join("");
+  alvo.querySelectorAll(".topo").forEach(t => t.onclick = () => abrir(c, lista.find(i => i.number == t.dataset.n)));
+}
+
+async function abrir(c, i) {
+  const card = $("#c-" + i.number);
+  if (card.classList.toggle("aberto") === false) return;
+  const corpo = $(".corpo", card), vid = idDoTitulo(i.title);
+  const links = [...(i.body || "").matchAll(/https:\/\/github\.com\/[^\s)"]+?\.mp4/g)].map(m => m[0]);
+  corpo.innerHTML = `
+    <div class="vid" id="v-${i.number}"><div class="aviso">Carregando a prévia…</div></div>
+    <div class="acoes">
+      <button class="ok" data-a="aprovar">✓ Aprovar</button>
+      <button class="refazer" data-a="refazer">✎ Refazer</button>
+      <button class="nao" data-a="cancelar">✕ Cancelar</button>
+    </div>
+    <details><summary>Ficha completa (roteiro, fontes, legendas)</summary><div class="ficha">${DOMPurify.sanitize(marked.parse(i.body || ""))}</div></details>
+    <details id="cm-${i.number}"><summary>Comentários (${i.comments})</summary><div></div></details>
+    <details><summary>Comentário livre</summary><textarea id="livre-${i.number}" placeholder="Escreva aqui (vai como comentário na issue)"></textarea>
+      <div class="acoes"><button data-a="livre">Enviar comentário</button> <a href="${esc(i.html_url)}">abrir no GitHub</a></div></details>`;
+  corpo.querySelectorAll("button[data-a]").forEach(b => b.onclick = () => acao(c, i, b.dataset.a));
+  $("#cm-" + i.number).addEventListener("toggle", e => { if (e.target.open) comentarios(c, i); }, { once: true });
+  carregarVideo(c, i, vid, links);
+}
+
+async function carregarVideo(c, i, vid, links) {
+  const caixa = $("#v-" + i.number), chave = c.repo + "/" + vid;
+  const pronto = url => { caixa.innerHTML = `<video controls playsinline preload="metadata" src="${url}"></video>`; };
+  if (blobs[chave]) return pronto(blobs[chave]);
+  if (vid) {
+    try {
+      const r = await api(`/repos/${DONO}/${c.repo}/contents/${encodeURIComponent(vid)}.mp4?ref=previas`, { headers: { Accept: "application/vnd.github.raw" } });
+      blobs[chave] = URL.createObjectURL(await r.blob());
+      return pronto(blobs[chave]);
+    } catch (e) { /* sem prévia: vídeo antigo */ }
+  }
+  caixa.innerHTML = `<div class="aviso">Este vídeo ainda não tem prévia (entrou antes da página existir).
+    ${links.length ? `<br><a href="${esc(links[0])}">Baixar o vídeo</a>` : ""}</div>`;
+}
+
+async function comentarios(c, i) {
+  const alvo = $("#cm-" + i.number + " > div");
+  alvo.textContent = "Carregando…";
+  try {
+    const lista = await (await api(`/repos/${DONO}/${c.repo}/issues/${i.number}/comments?per_page=100`)).json();
+    alvo.innerHTML = lista.slice(-15).map(x => `<div class="coment"><b>${esc(x.user.login)} · ${new Date(x.created_at).toLocaleString("pt-BR", {dateStyle:"short", timeStyle:"short"})}</b>
+      <div class="ficha">${DOMPurify.sanitize(marked.parse(x.body || ""))}</div></div>`).join("") || "Sem comentários.";
+  } catch (e) { alvo.textContent = "Não consegui ler: " + e.message; }
+}
+
+function perguntar(html, botoes) {
+  return new Promise(res => {
+    const m = $("#modal"); $("#caixa").innerHTML = html + `<div class="acoes">${botoes.map((b, k) => `<button class="${b.cls || ""}" data-k="${k}">${b.t}</button>`).join("")}</div>`;
+    m.style.display = "flex";
+    $("#caixa").querySelectorAll("button").forEach(b => b.onclick = () => { const v = botoes[b.dataset.k].v; const txt = $("#caixa textarea"); m.style.display = "none"; res(v === true && txt ? txt.value.trim() || null : v); });
+  });
+}
+
+async function acao(c, i, tipo) {
+  let corpoComentario;
+  if (tipo === "aprovar") corpoComentario = "/aprovar";
+  if (tipo === "cancelar") {
+    if (!await perguntar(`<p><b>Cancelar este vídeo?</b><br>Ele sai da fila e não é publicado.</p>`, [{ t: "Voltar", v: false }, { t: "Cancelar vídeo", v: true, cls: "nao" }])) return;
+    corpoComentario = "/cancelar";
+  }
+  if (tipo === "refazer") {
+    const txt = await perguntar(`<p><b>O que corrigir?</b></p><textarea placeholder="Ex.: a capa está cortada; trocar a frase do gancho por..."></textarea>`, [{ t: "Voltar", v: false }, { t: "Pedir correção", v: true, cls: "ok" }]);
+    if (!txt) return;
+    corpoComentario = "/refazer " + txt;
+  }
+  if (tipo === "livre") { corpoComentario = $("#livre-" + i.number).value.trim(); if (!corpoComentario) return; }
+  const card = $("#c-" + i.number); card.querySelectorAll("button").forEach(b => b.disabled = true);
+  try {
+    await api(`/repos/${DONO}/${c.repo}/issues/${i.number}/comments`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: corpoComentario }) });
+    aviso({ aprovar: "✓ Aprovado. O GitHub agenda em cerca de 1 minuto.", cancelar: "Cancelado.", refazer: "Pedido de correção enviado.", livre: "Comentário enviado." }[tipo], 5000);
+    if (tipo !== "livre") { card.style.opacity = .5; setTimeout(() => carregarTudo(), 60000); }
+    else { card.querySelectorAll("button").forEach(b => b.disabled = false); $("#livre-" + i.number).value = ""; }
+  } catch (e) { aviso("Não foi: " + e.message, 6000); card.querySelectorAll("button").forEach(b => b.disabled = false); }
+}
+
+token ? iniciar() : telaEntrar();
+</script>
+</body>
+</html>
