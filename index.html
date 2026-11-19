@@ -170,8 +170,20 @@ window.addEventListener("hashchange", () => { const h = location.hash.replace("#
 async function carregarTudo(avisar) {
   await Promise.all(CANAIS.map(async c => {
     try {
-      const r = await api(`/repos/${DONO}/${c.repo}/issues?state=open&per_page=100`);
-      const lista = (await r.json()).filter(i => !i.pull_request && i.labels.some(l => PENDENTES.includes(l.name)));
+      const [r, rf] = await Promise.all([
+        api(`/repos/${DONO}/${c.repo}/issues?state=open&per_page=100`),
+        api(`/repos/${DONO}/${c.repo}/contents/fila/fila.json`, { headers: { Accept: "application/vnd.github.raw" } }).catch(() => null)]);
+      const fila = {};   // a fila é quem manda: etiqueta antiga na issue não conta (19/11)
+      if (rf) try { (await rf.json()).videos.forEach(v => fila[v.id] = v.status); } catch (e) {}
+      const recente = i => Date.now() - new Date(i.created_at) < 4 * 864e5;
+      const pendente = i => {
+        const nomes = i.labels.map(l => l.name), st = fila[idDoTitulo(i.title)];
+        if (st) return ["aguardando", "revisar"].includes(st);
+        if (nomes.includes("piloto")) return recente(i);
+        return nomes.includes("aguardando-aprovacao") && !nomes.includes("aprovado");
+      };
+      const lista = (await r.json()).filter(i => !i.pull_request && pendente(i));
+      lista.forEach(i => i._status = fila[idDoTitulo(i.title)]);
       estado[c.id] = lista.sort((a, b) => a.number - b.number);
     } catch (e) { estado[c.id] = { erro: e.message }; }
     const n = $("#n-" + c.id), q = Array.isArray(estado[c.id]) ? estado[c.id].length : 0;
@@ -190,7 +202,8 @@ function desenhar() {
   if (lista.erro) { alvo.innerHTML = `<div class="vazio">Não consegui ler o ${esc(c.nome)}: ${esc(lista.erro)}</div>`; return; }
   if (!lista.length) { alvo.innerHTML = `<div class="vazio">Nada esperando aprovação no ${esc(c.nome)}. 🎉</div>`; return; }
   alvo.innerHTML = lista.map(i => {
-    const tags = i.labels.filter(l => PENDENTES.includes(l.name)).map(l => `<span class="tag ${esc(l.name)}">${esc(l.name.replace("aguardando-aprovacao", "aguardando"))}</span>`).join("");
+    const st = i._status || (i.labels.some(l => l.name === "piloto") ? "piloto" : "aguardando");
+    const tags = `<span class="tag ${st === "revisar" ? "revisar" : st === "piloto" ? "piloto" : "aguardando-aprovacao"}">${st === "revisar" ? "em revisão" : st}</span>`;
     return `<article class="card" id="c-${i.number}">
       <div class="topo" data-n="${i.number}"><h2>${esc(i.title.replace(/^Aprovar:\s*/, "").replace(/\s*\[[^\]]+\]\s*$/, ""))}</h2>
         <div class="meta">${tags}<span>#${i.number}</span><span>${new Date(i.created_at).toLocaleString("pt-BR", {dateStyle:"short", timeStyle:"short"})}</span></div></div>
